@@ -183,7 +183,7 @@
     }
 
     async function fetchClanMembers(clanName) {
-      const response = await fetch(`http://localhost:3001/api/kirka/clan-scoreboard?clan=${encodeURIComponent(clanName)}`);
+      const response = await fetch(`https://squirt-leaderboard.onrender.com/api/kirka/clan-scoreboard?clan=${encodeURIComponent(clanName)}`);
       if (!response.ok) throw new Error("Could not reach your backend on localhost:3001");
       const data = await response.json();
       if (!Array.isArray(data)) throw new Error("Backend did not return a player list");
