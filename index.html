@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kirka Daily Tracker</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f4f6f8;
+      color: #111827;
+    }
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .card {
+      background: white;
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.06);
+      margin-bottom: 20px;
+    }
+    h1, h2, h3 { margin: 0 0 12px; }
+    .topbar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    input, button, select {
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid #d1d5db;
+      font-size: 14px;
+    }
+    input, select { background: white; }
+    button {
+      background: #111827;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+    button:hover { opacity: .92; }
+    .muted { color: #6b7280; font-size: 14px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .stat {
+      font-size: 30px;
+      font-weight: 700;
+      margin-top: 8px;
+    }
+    .leader-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      border: 1px solid #e5e7eb;
+      border-radius: 14px;
+      padding: 14px;
+      margin-bottom: 10px;
+      background: #fff;
+    }
+    .rank {
+      display: inline-block;
+      background: #eef2ff;
+      color: #3730a3;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 12px;
+      margin-right: 8px;
+    }
+    .score {
+      text-align: right;
+      font-weight: 700;
+      font-size: 22px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+    }
+    th, td {
+      padding: 10px;
+      border-bottom: 1px solid #e5e7eb;
+      text-align: left;
+      font-size: 14px;
+    }
+    .error { color: #b91c1c; margin-top: 12px; }
+    @media (max-width: 800px) {
+      .grid { grid-template-columns: 1fr; }
+      .leader-row { flex-direction: column; align-items: flex-start; }
+      .score { text-align: left; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Kirka Daily Tracker</h1>
+      <p class="muted">Tracks how much score each player gained today. Daily score = current total score minus the first score seen that day.</p>
+      <div class="topbar">
+        <input id="clanName" value="Squirt" placeholder="Clan name" />
+        <button id="refreshBtn">Refresh Now</button>
+        <button id="autoBtn">Start Auto Refresh</button>
+        <select id="daySelect"></select>
+        <input id="searchBox" placeholder="Search player" />
+      </div>
+      <div id="status" class="muted" style="margin-top:12px;"></div>
+      <div id="error" class="error"></div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3>Clan Score Today</h3>
+        <div id="clanTotal" class="stat">0</div>
+      </div>
+      <div class="card">
+        <h3>Tracked Members</h3>
+        <div id="memberCount" class="stat">0</div>
+      </div>
+      <div class="card">
+        <h3>Top Scorer</h3>
+        <div id="topScorer" class="stat">—</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Daily Leaderboard</h2>
+      <div id="leaderboard"></div>
+    </div>
+
+    <div class="card">
+      <h2>Past Days</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Day</th>
+            <th>Clan Total</th>
+            <th>Top Player</th>
+          </tr>
+        </thead>
+        <tbody id="historyTable"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = "kirka_daily_tracker_snapshots_v1";
+    const SETTINGS_KEY = "kirka_daily_tracker_settings_v1";
+    let autoRefreshId = null;
+
+    function todayKey(date = new Date()) {
+      return date.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+    }
+
+    function prettyDay(day) {
+      const d = new Date(day + "T12:00:00");
+      return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    }
+
+    function loadSnapshots() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+      catch { return []; }
+    }
+
+    function saveSnapshots(rows) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(rows));
+    }
+
+    function loadSettings() {
+      try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"); }
+      catch { return {}; }
+    }
+
+    function saveSettings(settings) {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    }
+
+    async function fetchClanMembers(clanName) {
+      const response = await fetch(`http://localhost:3001/api/kirka/clan-scoreboard?clan=${encodeURIComponent(clanName)}`);
+      if (!response.ok) throw new Error("Could not reach your backend on localhost:3001");
+      const data = await response.json();
+      if (!Array.isArray(data)) throw new Error("Backend did not return a player list");
+      return data.map((member) => ({
+        id: String(member.id ?? member.name),
+        name: String(member.name ?? "Unknown"),
+        totalScore: Number(member.totalScore ?? 0),
+        clan: String(member.clan ?? clanName),
+      }));
+    }
+
+    function mergeSnapshot(existing, clanName, members) {
+      const day = todayKey();
+      const now = new Date().toISOString();
+      const next = [...existing];
+
+      members.forEach((member) => {
+        const baselineExists = next.some(
+          (x) => x.day === day && x.clanName === clanName && x.memberId === member.id && x.kind === "baseline"
+        );
+
+        if (!baselineExists) {
+          next.push({
+            day,
+            clanName,
+            memberId: member.id,
+            memberName: member.name,
+            totalScore: member.totalScore,
+            kind: "baseline",
+            recordedAt: now,
+          });
+        }
+
+        next.push({
+          day,
+          clanName,
+          memberId: member.id,
+          memberName: member.name,
+          totalScore: member.totalScore,
+          kind: "current",
+          recordedAt: now,
+        });
+      });
+
+      return next;
+    }
+
+    function buildDailyRows(snapshots, clanName) {
+      const grouped = new Map();
+
+      snapshots
+        .filter((x) => x.clanName === clanName)
+        .forEach((row) => {
+          const key = `${row.day}__${row.memberId}`;
+          if (!grouped.has(key)) {
+            grouped.set(key, {
+              day: row.day,
+              memberId: row.memberId,
+              memberName: row.memberName,
+              baseline: null,
+              latest: null,
+            });
+          }
+          const item = grouped.get(key);
+          if (row.kind === "baseline") item.baseline = row;
+          if (!item.latest || new Date(row.recordedAt) > new Date(item.latest.recordedAt)) {
+            item.latest = row;
+          }
+        });
+
+      return Array.from(grouped.values()).map((item) => ({
+        day: item.day,
+        memberId: item.memberId,
+        memberName: item.memberName,
+        totalScore: item.latest?.totalScore ?? 0,
+        dailyScore: Math.max(0, (item.latest?.totalScore ?? 0) - (item.baseline?.totalScore ?? 0)),
+      }));
+    }
+
+    function render() {
+      const clanName = document.getElementById("clanName").value.trim() || "Squirt";
+      const search = document.getElementById("searchBox").value.trim().toLowerCase();
+      const snapshots = loadSnapshots();
+      const dailyRows = buildDailyRows(snapshots, clanName);
+      const daySelect = document.getElementById("daySelect");
+      const historyTable = document.getElementById("historyTable");
+      const leaderboard = document.getElementById("leaderboard");
+
+      const allDays = [...new Set(dailyRows.map((x) => x.day))].sort((a, b) => a < b ? 1 : -1);
+      const currentSelected = daySelect.value || allDays[0] || todayKey();
+
+      daySelect.innerHTML = allDays.map((day) => `<option value="${day}" ${day === currentSelected ? "selected" : ""}>${prettyDay(day)}</option>`).join("");
+
+      const selectedDay = daySelect.value || currentSelected;
+      const rowsForDay = dailyRows
+        .filter((x) => x.day === selectedDay)
+        .filter((x) => x.memberName.toLowerCase().includes(search))
+        .sort((a, b) => b.dailyScore - a.dailyScore);
+
+      const clanTotal = rowsForDay.reduce((sum, x) => sum + x.dailyScore, 0);
+      document.getElementById("clanTotal").textContent = clanTotal.toLocaleString();
+      document.getElementById("memberCount").textContent = rowsForDay.length.toString();
+      document.getElementById("topScorer").textContent = rowsForDay[0]?.memberName || "—";
+
+      if (!rowsForDay.length) {
+        leaderboard.innerHTML = '<div class="muted">No score data yet. Click Refresh Now.</div>';
+      } else {
+        leaderboard.innerHTML = rowsForDay.map((row, index) => `
+          <div class="leader-row">
+            <div>
+              <span class="rank">#${index + 1}</span>
+              <strong>${row.memberName}</strong>
+              <div class="muted">Total score: ${row.totalScore.toLocaleString()}</div>
+            </div>
+            <div class="score">${row.dailyScore.toLocaleString()}<div class="muted">daily score</div></div>
+          </div>
+        `).join("");
+      }
+
+      const dailySummaries = allDays.map((day) => {
+        const rows = dailyRows.filter((x) => x.day === day).sort((a, b) => b.dailyScore - a.dailyScore);
+        return {
+          day,
+          total: rows.reduce((sum, x) => sum + x.dailyScore, 0),
+          top: rows[0]?.memberName || "—",
+        };
+      });
+
+      historyTable.innerHTML = dailySummaries.map((row) => `
+        <tr>
+          <td>${prettyDay(row.day)}</td>
+          <td>${row.total.toLocaleString()}</td>
+          <td>${row.top}</td>
+        </tr>
+      `).join("");
+    }
+
+    async function refreshNow() {
+      const clanName = document.getElementById("clanName").value.trim() || "Squirt";
+      const errorEl = document.getElementById("error");
+      const statusEl = document.getElementById("status");
+      errorEl.textContent = "";
+      statusEl.textContent = "Refreshing...";
+
+      try {
+        const members = await fetchClanMembers(clanName);
+        const next = mergeSnapshot(loadSnapshots(), clanName, members);
+        saveSnapshots(next);
+        saveSettings({ clanName });
+        statusEl.textContent = `Last updated: ${new Date().toLocaleString()}`;
+        render();
+      } catch (err) {
+        errorEl.textContent = err.message || "Refresh failed";
+        statusEl.textContent = "";
+      }
+    }
+
+    function toggleAutoRefresh() {
+      const btn = document.getElementById("autoBtn");
+      if (autoRefreshId) {
+        clearInterval(autoRefreshId);
+        autoRefreshId = null;
+        btn.textContent = "Start Auto Refresh";
+        return;
+      }
+      autoRefreshId = setInterval(refreshNow, 5 * 60 * 1000);
+      btn.textContent = "Stop Auto Refresh";
+      refreshNow();
+    }
+
+    document.getElementById("refreshBtn").addEventListener("click", refreshNow);
+    document.getElementById("autoBtn").addEventListener("click", toggleAutoRefresh);
+    document.getElementById("daySelect").addEventListener("change", render);
+    document.getElementById("searchBox").addEventListener("input", render);
+    document.getElementById("clanName").addEventListener("change", () => {
+      saveSettings({ clanName: document.getElementById("clanName").value.trim() || "Squirt" });
+      render();
+    });
+
+    (function init() {
+      const settings = loadSettings();
+      if (settings.clanName) document.getElementById("clanName").value = settings.clanName;
+      render();
+    })();
+  </script>
+</body>
+</html>
